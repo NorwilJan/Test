@@ -4,7 +4,7 @@ const BASE_URL = 'https://api.themoviedb.org/3';
 const IMG_URL = 'https://image.tmdb.org/t/p/original';
 const FALLBACK_IMAGE = 'https://via.placeholder.com/150x225?text=No+Image';
 
-// --- CONFIGURATION OBJECTS (NEW) ---
+// --- CONFIGURATION OBJECTS ---
 const PLAYER_CONFIG = {
     'vidsrc.cc': { 
         name: 'Vidsrc.cc',
@@ -32,7 +32,7 @@ const GENRES = [
   { id: 16, name: 'Animation' }, { id: 9648, name: 'Mystery' }
 ];
 
-// --- APPLICATION STATE (CLEANER) ---
+// --- APPLICATION STATE ---
 let currentItem;
 let currentSeason = 1;
 let currentEpisode = 1;
@@ -107,6 +107,7 @@ async function fetchCategoryContent(category, page, filters = {}) {
         const sortBy = filters.sort_by || 'popularity.desc';
         baseParams += `&sort_by=${sortBy}`;
         
+        // This is where the filters are applied
         const filterParams = `${filters.year ? `&primary_release_year=${filters.year}` : ''}${filters.genre ? `&with_genres=${filters.genre}` : ''}`;
         let fetchURL = '';
         let mediaType = category.includes('movie') ? 'movie' : 'tv';
@@ -395,17 +396,26 @@ function showToast(message, duration = 3000) {
 function loadUserSettings() {
     try {
         const json = localStorage.getItem(USER_SETTINGS_KEY);
-        // Default to the most reliable player
-        return json ? JSON.parse(json) : { defaultServer: 'player.videasy.net' };
+        // Default to the most reliable player and dark theme
+        return json ? JSON.parse(json) : { 
+            defaultServer: 'player.videasy.net',
+            theme: 'dark'
+        };
     } catch (e) {
         console.error("Error loading user settings:", e);
-        return { defaultServer: 'player.videasy.net' };
+        return { 
+            defaultServer: 'player.videasy.net',
+            theme: 'dark'
+        };
     }
 }
 
 function saveUserSettings(settings) {
+    let currentSettings = loadUserSettings();
+    // Merge new settings with existing ones
+    let newSettings = { ...currentSettings, ...settings };
     try {
-        localStorage.setItem(USER_SETTINGS_KEY, JSON.stringify(settings));
+        localStorage.setItem(USER_SETTINGS_KEY, JSON.stringify(newSettings));
     } catch (e) {
         console.error("Error saving user settings:", e);
     }
@@ -413,14 +423,45 @@ function saveUserSettings(settings) {
 
 function saveDefaultServer() {
     const selectedServer = document.getElementById('server').value;
-    const settings = loadUserSettings();
     
-    settings.defaultServer = selectedServer;
-    saveUserSettings(settings);
+    saveUserSettings({ defaultServer: selectedServer });
     
     const serverName = PLAYER_CONFIG[selectedServer]?.name || selectedServer;
     showToast(`✅ Default server set to ${serverName}!`); 
 }
+
+/**
+ * THEME LOGIC (UNCHANGED)
+ */
+function applyTheme(isLight) {
+    const body = document.body;
+    const icon = document.getElementById('theme-toggle-btn')?.querySelector('i');
+    
+    if (isLight) {
+        body.classList.add('light-mode');
+        // Sun icon for Light Mode (telling user they can switch to Dark)
+        if(icon) icon.className = 'fas fa-sun'; 
+        saveUserSettings({ theme: 'light' });
+    } else {
+        body.classList.remove('light-mode');
+        // Moon icon for Dark Mode (telling user they can switch to Light)
+        if(icon) icon.className = 'fas fa-moon'; 
+        saveUserSettings({ theme: 'dark' });
+    }
+}
+
+function loadThemePreference() {
+    const settings = loadUserSettings();
+    const isLight = settings.theme === 'light';
+    applyTheme(isLight);
+}
+
+function toggleTheme() {
+    const isLight = document.body.classList.contains('light-mode');
+    // Toggle the theme (if it's currently light, switch to dark, and vice versa)
+    applyTheme(!isLight);
+}
+// END THEME LOGIC
 
 function addToRecentlyViewed(item) {
   const itemData = {
@@ -698,6 +739,8 @@ function clearFilters(category) {
 }
 
 
+// START: Full View & Filter Modal Updates
+
 function openFullView(category) {
     currentFullView = category;
     
@@ -714,6 +757,7 @@ function openFullView(category) {
 
     const title = category.replace('-', ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     
+    // Updated HTML for the Full View Modal to include the filter button
     fullViewContainer.innerHTML = `
         <span class="close" id="full-view-close-btn" style="color: red;">&times;</span>
         <h2 style="text-transform: uppercase;">${title}</h2>
@@ -726,12 +770,20 @@ function openFullView(category) {
                 <option value="vote_average.desc">Rating (Highest)</option>
                 <option value="title.asc">Title (A-Z)</option>
             </select>
+            <button class="filter-btn" id="full-view-filter-btn" aria-label="Open Filters">
+                <i class="fas fa-filter"></i> Filters
+            </button>
         </div>
         <div class="results" id="${category}-full-list"></div>
     `;
     
     document.getElementById('full-view-close-btn').addEventListener('click', closeFullView);
     document.getElementById('full-view-sort').addEventListener('change', applyFullViewSort);
+    // NEW LISTENER for the filter button inside the full view
+    document.getElementById('full-view-filter-btn').addEventListener('click', () => {
+        openFilterModal(category, true); // Pass 'true' to indicate full-view context
+    }); 
+    
     document.getElementById('full-view-sort').value = filters.sort_by;
 
     categoryState[category].page = 0; 
@@ -817,7 +869,7 @@ async function loadMoreFullView(category, filters, isFirstLoad = false) {
         document.getElementById(containerId)?.querySelector('.loading')?.remove();
         state.isLoading = false;
         
-        if (container.children.length === 0) {
+        if (isFirstLoad && container.children.length === 0) {
             container.innerHTML = '<p style="color: #ccc; text-align: center; width: 100%;">No content matches your active filter in the full view.</p>';
         }
         
@@ -840,28 +892,10 @@ async function loadMoreFullView(category, filters, isFirstLoad = false) {
   }
 }
 
-function populateFilterOptions() {
-    const yearSelect = document.getElementById('filter-year');
-    const genreSelect = document.getElementById('filter-genre');
-    
-    if (!yearSelect || !genreSelect) return; 
-
-    // Populate Year
-    const currentYear = new Date().getFullYear();
-    for (let i = 0; i < 20; i++) {
-        const year = currentYear - i;
-        const option = new Option(year, year);
-        yearSelect.appendChild(option);
-    }
-    
-    // Populate Genre
-    GENRES.forEach(genre => {
-        const option = new Option(genre.name, genre.id);
-        genreSelect.appendChild(option);
-    });
-}
-
-function openFilterModal(category) {
+/**
+ * UPDATED: Populates filter options and prepares the modal. Now accepts isFullView flag.
+ */
+function openFilterModal(category, isFullView = false) {
     currentCategoryToFilter = category;
     
     const modalTitle = document.getElementById('filter-modal-title');
@@ -873,32 +907,88 @@ function openFilterModal(category) {
     modalTitle.textContent = `Filter ${title}`;
     
     const currentFilters = categoryState[category].filters;
+    
+    // Set current values
     document.getElementById('filter-year').value = currentFilters.year || '';
-    document.getElementById('filter-genre').value = currentFilters.genre || '';
+    document.getElementById('filter-genre').value = currentFilters.genre ? String(currentFilters.genre) : '';
+    
+    // Update button text and data-target-view based on context
+    const applyBtn = document.getElementById('apply-filters-btn');
+    if (isFullView) {
+        applyBtn.textContent = 'Apply Filters and Reload List';
+        applyBtn.setAttribute('data-target-view', 'full');
+    } else {
+        applyBtn.textContent = 'Apply Filters and Show More';
+        applyBtn.setAttribute('data-target-view', 'row');
+    }
     
     filterModal.style.display = 'flex';
 }
 
+function populateFilterOptions() {
+    const yearSelect = document.getElementById('filter-year');
+    const genreSelect = document.getElementById('filter-genre');
+    
+    if (!yearSelect || !genreSelect) return; 
+
+    // 1. Populate Year Options (Current year back 20 years)
+    yearSelect.innerHTML = '<option value="">Any Year</option>';
+    const currentYear = new Date().getFullYear();
+    for (let i = 0; i < 20; i++) {
+        const year = currentYear - i;
+        const option = new Option(year, year);
+        yearSelect.appendChild(option);
+    }
+    
+    // 2. Populate Genre Options using the global GENRES array
+    genreSelect.innerHTML = '<option value="">Any Genre</option>';
+    GENRES.forEach(genre => {
+        const option = new Option(genre.name, genre.id);
+        genreSelect.appendChild(option);
+    });
+}
+
+/**
+ * UPDATED: Handles filter application and targets the correct view (row vs. full).
+ */
 function applyFilters() {
     const year = document.getElementById('filter-year').value;
     const genre = document.getElementById('filter-genre').value;
     const category = currentCategoryToFilter;
+    const targetView = document.getElementById('apply-filters-btn').getAttribute('data-target-view');
 
     if (!category) return;
     
     document.getElementById('filter-modal').style.display = 'none';
     
-    const newFilters = { year: year, genre: genre };
+    // Ensure genre is an integer if a value is selected, and keep the current sort_by setting
+    const newFilters = { 
+        year: year, 
+        genre: genre ? parseInt(genre) : '',
+        sort_by: categoryState[category].filters.sort_by 
+    };
 
     categoryState[category].filters = newFilters;
     updateFilterButtons(category, newFilters);
     
-    loadRowContent(category, newFilters);
-    
-    openFullView(category);
-    showToast(`Filters Applied to ${category.replace('-', ' ')}`);
+    // Based on where the filter was opened, update the relevant view
+    if (targetView === 'full') {
+        const fullViewSort = document.getElementById('full-view-sort');
+        if(fullViewSort) fullViewSort.value = newFilters.sort_by; // Sync the sort dropdown
+        
+        categoryState[category].page = 0; // Reset page count for full view
+        loadMoreFullView(category, newFilters, true);
+        
+        showToast(`Filters Applied to Full View`);
+    } else {
+        // This is the original path from the main page row filter (applies filter, then opens full view)
+        loadRowContent(category, newFilters);
+        openFullView(category);
+        showToast(`Filters Applied and Full View Opened`);
+    }
 }
 
+// END: Full View & Filter Modal Updates
 
 // --- DETAILS & MODAL LOGIC (MODIFIED for Auto-Highlight and Default Server) ---
 
@@ -1126,7 +1216,7 @@ const debouncedSearchTMDB = debounce(async () => {
 }, 300);
 
 
-// --- EVENT LISTENER SETUP (NEW UNIFIED FUNCTION) ---
+// --- EVENT LISTENER SETUP (UNCHANGED) ---
 
 function attachListeners() {
     // Navbar/Modal Closers
@@ -1136,6 +1226,9 @@ function attachListeners() {
     document.getElementById('filter-modal-close-btn').addEventListener('click', () => {
         document.getElementById('filter-modal').style.display='none';
     });
+    
+    // Theme Toggle
+    document.getElementById('theme-toggle-btn').addEventListener('click', toggleTheme);
 
     // Slideshow Controls
     document.getElementById('prev-slide-btn').addEventListener('click', () => changeSlide(-1));
@@ -1180,7 +1273,7 @@ function attachListeners() {
 }
 
 
-// --- INITIALIZATION ---
+// --- INITIALIZATION (UNCHANGED) ---
 
 async function init() {
   document.getElementById('empty-message').style.display = 'none';
@@ -1190,8 +1283,10 @@ async function init() {
       return;
   }
   
+  loadThemePreference(); // Load theme immediately before showing content
   populateServerOptions(); // Populate server dropdown once
   attachListeners(); // Attach all event handlers
+  populateFilterOptions(); // Populate filter dropdowns
   
   // Show loading/skeletons for all sections
   const categoryIds = Object.keys(categoryState);
@@ -1204,7 +1299,6 @@ async function init() {
   displayShopeeLinks();
   displayFavorites();
   displayRecentlyViewed();
-  populateFilterOptions(); 
 
   // Use Promise.allSettled for robust parallel loading
   const fetchPromises = categoryIds.map(category => fetchCategoryContent(category, 1));
